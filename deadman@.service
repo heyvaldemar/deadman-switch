@@ -1,0 +1,12 @@
+[Unit]
+Description=Dead man's switch for %i — every condition that must hold
+Documentation=https://github.com/heyvaldemar/deadman-switch
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/deadman/%i.env
+ExecStart=/usr/local/sbin/deadman.sh
+# Bounded, so a check wedged on an unresponsive daemon fails the unit instead
+# of sitting in "activating" while the switch quietly stops being pinged.
+TimeoutStartSec=4m

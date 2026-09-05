@@ -1,0 +1,48 @@
+# One check per line: KIND<TAB>NAME<TAB>ARGUMENTS. Lines starting with # are
+# ignored. Files are read in name order, so number them if the order matters
+# for readability - it does not matter for the result, since every check runs.
+#
+# Delete what does not apply. An empty configuration is treated as a failure
+# on purpose: a switch that checks nothing must not look healthy.
+
+# --- the workload
+container_running	the reverse proxy	traefik
+container_healthy	the database	postgres
+
+# --- the watchers themselves, which is the part people leave out
+#
+# A watcher that dies quietly is worse than no watcher: you stop looking
+# because nothing is complaining. Assert that whatever watches your images,
+# your uptime or your disks is still running AND still doing its work.
+container_running	the image-update watcher	diun
+container_running	the uptime monitor	uptime-kuma
+
+# --- markers left by scheduled work
+#
+# Threshold on the marker that says the job RAN, not the one that says the
+# result was clean. Only the first detects a job that stopped; a threshold on
+# the second repeats the job's own alarm for the whole duration of a real
+# problem, and stays silent when the job simply disappears.
+#
+# The number is minutes. Allow one missed run plus the run itself: an hourly
+# job wants about 90, a daily one about 2160.
+stamp	the off-site mirror	/var/lib/git-mirror/last-run 90
+stamp	the nightly backup	/var/lib/backup/last-run 2160
+stamp	the SMART watcher	/var/lib/smart-check/last-run 90
+
+# --- storage
+mount_writable	the storage array	/mnt/storage
+
+# --- a file a watcher DROPS when it finds something critical
+absent	a critical disk finding	/var/lib/smart-check/critical
+
+# --- everything systemd already knows
+#
+# A task killed partway - OOM, panic, power - never reaches its own failure
+# handler, so the message it would have sent is never sent. systemd knows
+# immediately. One check covers every unit on the host, including the ones
+# added next year, with nobody having to remember anything.
+no_failed_units	no systemd unit has failed
+
+# --- anything else
+command	the certificate has more than 14 days left	test "$(( ($(date -d "$(openssl x509 -enddate -noout -in /etc/ssl/app.crt | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))" -gt 14
