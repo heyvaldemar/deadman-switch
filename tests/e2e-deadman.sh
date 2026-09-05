@@ -59,6 +59,7 @@ done
 [ "$up" = true ] || { echo "the ping server never came up on port $PORT - every ping assertion below would be meaningless"; exit 1; }
 : > "$WORK/pings.log"
 
+# shellcheck disable=SC2120  # the optional argument is a mode flag, usually unset
 run_deadman() {
   DEADMAN_CHECKS_DIR="$WORK/checks.d" DEADMAN_PING_URL="http://127.0.0.1:$PORT/switch" \
   DEADMAN_STATE_DIR="$WORK/state" bash "$DEADMAN" "${1:-}" 2>&1
