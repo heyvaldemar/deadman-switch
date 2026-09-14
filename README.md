@@ -19,6 +19,17 @@ stamp	the off-site mirror	/var/lib/git-mirror/last-run 90
 
 A watcher that dies quietly is worse than no watcher, because you stop looking.
 
+And a watcher that is alive can still be wrong. Anything that reports on other things — a status page, an inventory, a table of scheduled jobs — goes wrong confidently, and its wrongness is indistinguishable from good news, because nothing else is looking at the same fact. So ask the question twice, from two places that cannot fail the same way:
+
+```
+agree	the timer table lists every timer	systemctl list-timers --all --no-legend | grep -c '\.timer' ::: grep -c . /etc/timers.tsv
+orphan_timers	every enabled timer still has its service
+```
+
+On the host this comes from, those two answers differed by five: five timers were firing on a schedule nobody had written down. Every report on that machine had been green throughout, because every report read the table. `orphan_timers` is the same idea pointed the other way — a timer whose service was deleted never fails, it fires, systemd finds nothing to start, and the job silently stops happening.
+
+Both sides answering nothing is a failure rather than agreement: two commands that produce no output compare equal, and that is exactly what a check which has quietly stopped checking looks like.
+
 The third line is the one worth copying. Two markers on the host this came from had been written faithfully for months and read by nothing: the off-site mirror could have stopped pushing — an expired deploy key, a rejected commit — and every report would have stayed green while the only copy of that machine's configuration went stale. Whenever something starts writing a success marker, the question "what raises the alarm when this stops moving?" has to be answered at the same time, not later.
 
 Threshold on the marker that says the job **ran**, not the one that says the result was clean. The first detects a job that stopped; a threshold on the second repeats the job's own alarm for the whole duration of a real problem, and says nothing at all when the job simply disappears.

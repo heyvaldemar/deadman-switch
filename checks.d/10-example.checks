@@ -36,6 +36,25 @@ mount_writable	the storage array	/mnt/storage
 # --- a file a watcher DROPS when it finds something critical
 absent	a critical disk finding	/var/lib/smart-check/critical
 
+# --- two independent answers to the same question, which must agree
+#
+# Everything above asks one source one question. That is enough while the
+# source is honest, and it stops being enough for anything that REPORTS on
+# other things: a status page, an inventory, a table of scheduled jobs. When
+# one of those goes wrong it goes wrong confidently, and nothing else is
+# looking at the same fact.
+#
+# The two commands are separated by " ::: ". Both sides answering nothing is a
+# failure, not agreement.
+agree	the timer table lists every timer	systemctl list-timers --all --no-legend | grep -c '\.timer' ::: grep -c . /etc/timers.tsv
+
+# --- a timer whose service was deleted
+#
+# It never fails. It fires, systemd finds nothing to start, and the job
+# silently stops happening — so no_failed_units below cannot see it, and
+# neither can anything waiting for a failure.
+orphan_timers	every enabled timer still has its service
+
 # --- everything systemd already knows
 #
 # A task killed partway - OOM, panic, power - never reaches its own failure

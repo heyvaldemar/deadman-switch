@@ -46,6 +46,13 @@ log() { printf '%s\n' "$*"; }
 # exist because each one is a mistake somebody has already made.
 
 # A container is running. Not "exists", not "was started once".
+# The systemd kinds go through this rather than calling systemctl directly.
+# Not indirection for its own sake: without it neither of them can ever be
+# SHOWN a violation, and a check kind that has never failed is exactly what
+# this repository argues against everywhere else. tests/e2e-deadman.sh puts a
+# stand-in here and asserts both directions.
+SYSTEMCTL="${DEADMAN_SYSTEMCTL:-systemctl}"
+
 check_container_running() {
   local c="$1"
   [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = "true" ] \
@@ -149,12 +156,75 @@ check_absent() {
 # the confident tone of a working check.
 check_no_failed_units() {
   local out failed
-  if ! out=$(systemctl list-units --state=failed --no-legend --plain 2>&1); then
+  if ! out=$("$SYSTEMCTL" list-units --state=failed --no-legend --plain 2>&1); then
     echo "cannot query systemd for failed units: $(printf '%s' "$out" | head -1)"
     return 1
   fi
   failed=$(printf '%s' "$out" | awk '{print $1}' | tr '\n' ' ')
   [ -z "${failed// /}" ] || { echo "systemd units failed: ${failed% }"; return 1; }
+}
+
+# TWO INDEPENDENT ANSWERS TO THE SAME QUESTION, AND THEY MUST AGREE.
+#
+# Everything above asks one source one question, which is enough while the
+# source is honest. It stops being enough for the things that REPORT on other
+# things: a status page, an inventory, a report that says how many jobs ran. If
+# one of those goes wrong it goes wrong confidently, and its wrongness is
+# indistinguishable from good news — nothing else is looking at the same fact.
+#
+# So ask twice, from two places that cannot fail the same way, and compare.
+# On the host these rules come from, asking "how many timers are scheduled?" of
+# systemd and of the table that is supposed to list them disagreed by five:
+# five timers were firing on a schedule nobody had written down. Every report
+# on that machine had been green throughout, because every report read the
+# table.
+#
+#   agree<TAB>the timer table is complete<TAB>systemctl list-timers ... | wc -l ::: wc -l < /etc/timers.tsv
+#
+# The two commands are separated by ` ::: `. Both run under sh -c; the check
+# fails when their output differs, and says both answers.
+check_agree() {
+  local spec="$*" left right a b
+  case "$spec" in *' ::: '*) ;; *) echo "agree needs two commands separated by ' ::: '"; return 1 ;; esac
+  left="${spec%% ::: *}"; right="${spec#* ::: }"
+  a="$(sh -c "$left" 2>&1)"; b="$(sh -c "$right" 2>&1)"
+  # Whitespace differs between two tools answering the same question far more
+  # often than the answer does.
+  a="$(printf '%s' "$a" | tr -d '[:space:]')"; b="$(printf '%s' "$b" | tr -d '[:space:]')"
+  if [ -z "$a" ] && [ -z "$b" ]; then
+    # Both silent is not agreement, it is two commands that did not run.
+    echo "both sides answered nothing — a question with no answer is not two answers that agree"
+    return 1
+  fi
+  [ "$a" = "$b" ] || { echo "the two sides disagree: '$(printf '%s' "$a" | head -c 80)' against '$(printf '%s' "$b" | head -c 80)'"; return 1; }
+}
+
+# EVERY ENABLED TIMER STILL HAS THE SERVICE IT STARTS.
+#
+# A timer whose unit was deleted does not fail. It fires, systemd finds nothing
+# to start, and the job silently never runs again — so no_failed_units above
+# cannot see it, and neither can anything that waits for a failure. Five of
+# these were found on the host this comes from, left behind by scripts that had
+# been renamed or removed.
+check_orphan_timers() {
+  local out orphans="" t unit
+  if ! out=$("$SYSTEMCTL" list-timers --all --no-legend --no-pager 2>&1); then
+    echo "cannot query systemd for timers: $(printf '%s' "$out" | head -1)"
+    return 1
+  fi
+  while read -r t; do
+    [ -n "$t" ] || continue
+    unit="$("$SYSTEMCTL" show -p Unit --value "$t" 2>/dev/null)"
+    [ -n "$unit" ] || unit="${t%.timer}.service"
+    # LoadState, not "is it running": the service of a timer is inactive
+    # almost all the time by design. What matters is whether systemd can find
+    # it at all.
+    case "$("$SYSTEMCTL" show -p LoadState --value "$unit" 2>/dev/null)" in
+      loaded) ;;
+      *) orphans="$orphans $t" ;;
+    esac
+  done < <(printf '%s\n' "$out" | awk '{for(i=1;i<=NF;i++) if ($i ~ /\.timer$/) print $i}')
+  [ -z "${orphans// /}" ] || { echo "enabled timers whose service does not exist:${orphans}"; return 1; }
 }
 
 # Anything else. The command runs under `sh -c`; a non-zero exit fails the run

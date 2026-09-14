@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(no unreleased changes yet)_
 
+## [1.1.0] - 2026-09-14
+
+### Added
+
+- **`agree`: two independent answers to the same question, which must match.**
+  Every other kind asks one source one question, which is enough while the
+  source is honest and stops being enough for anything that reports on other
+  things. On the host these rules come from, systemd and the table that was
+  supposed to list its timers disagreed by five — five timers firing on a
+  schedule nobody had written down, while every report stayed green because
+  every report read the table. Both sides answering nothing is a failure
+  rather than agreement: two commands that produce no output compare equal,
+  which is what a check that has quietly stopped checking looks like.
+- **`orphan_timers`: every enabled timer still has the service it starts.** A
+  timer whose unit was deleted does not fail. It fires, systemd finds nothing
+  to start, and the job silently never runs again, so `no_failed_units` cannot
+  see it and neither can anything waiting for a failure. Five were found on
+  the host this comes from, left behind by renamed scripts.
+- Six scenarios, both directions each. The two systemd kinds now go through an
+  overridable `$SYSTEMCTL`, because without that seam neither could ever be
+  shown a violation — and a check kind that has never failed is the thing this
+  repository argues against everywhere else.
+
 ## [1.0.0] - 2026-09-05
 
 ### Added
@@ -45,5 +68,6 @@ _(no unreleased changes yet)_
   empty output as "nothing failed" reports a host that cannot answer as healthy,
   forever.
 
-[Unreleased]: https://github.com/heyvaldemar/deadman-switch/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/heyvaldemar/deadman-switch/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/heyvaldemar/deadman-switch/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/heyvaldemar/deadman-switch/releases/tag/v1.0.0

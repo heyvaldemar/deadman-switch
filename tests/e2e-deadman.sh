@@ -130,6 +130,102 @@ only "$(printf 'command\tan arbitrary command\tfalse')"
 out="$(run_deadman)"
 if printf '%s' "$out" | grep -q 'command failed'; then pass "an arbitrary failing command is caught"; else fail "a failing command passed"; fi
 
+# ------------------------------------------------ two answers that must agree
+#
+# The kind that exists for the things which REPORT on other things: if one of
+# those goes wrong it goes wrong confidently, and nothing else is looking at the
+# same fact. On the host these rules come from, systemd and the table that was
+# supposed to list its timers disagreed by five.
+only "$(printf 'agree\tthe two counts\techo 7 ::: echo 7')"
+out="$(run_deadman --dry-run)"
+if printf '%s' "$out" | grep -q '  ok    the two counts'; then
+  pass "two sides that answer the same thing agree"
+else
+  fail "two identical answers were called a disagreement"; printf '%s\n' "$out" | sed 's/^/        /' | tail -3
+fi
+
+only "$(printf 'agree\tthe two counts\techo 7 ::: echo 12')"
+out="$(run_deadman)"
+if printf '%s' "$out" | grep -q "disagree: '7' against '12'"; then
+  pass "two sides that disagree are caught, and both answers are quoted"
+else
+  fail "a disagreement passed"; printf '%s\n' "$out" | sed 's/^/        /' | tail -3
+fi
+
+# BOTH SILENT IS NOT AGREEMENT. Two commands that produce nothing — a typo in
+# both, a tool that is not installed — compare equal, and that is exactly the
+# shape of a check that has quietly stopped checking.
+only "$(printf 'agree\tthe two counts\ttrue ::: true')"
+out="$(run_deadman)"
+if printf '%s' "$out" | grep -q 'both sides answered nothing'; then
+  pass "two sides that both say nothing is a failure, not agreement"
+else
+  fail "silence on both sides was read as agreement"; printf '%s\n' "$out" | sed 's/^/        /' | tail -3
+fi
+
+only "$(printf 'agree\tthe two counts\techo 7')"
+out="$(run_deadman)"
+if printf '%s' "$out" | grep -q "separated by"; then
+  pass "a single command is refused rather than compared against nothing"
+else
+  fail "a malformed agree check passed"; printf '%s\n' "$out" | sed 's/^/        /' | tail -3
+fi
+
+# ------------------------------------------- a timer whose service is gone
+#
+# It does not fail. It fires, systemd finds nothing to start, and the job
+# silently never runs again — so the failed-units check cannot see it and
+# neither can anything that waits for a failure. Five of these were found on
+# the host these rules come from, left by scripts that had been renamed.
+#
+# systemd is not available on every runner and cannot be made to hold a broken
+# timer on demand, so the two kinds that ask it go through $SYSTEMCTL and a
+# stand-in answers here. Without that seam neither kind could ever be shown a
+# violation, which is the thing this whole file exists to refuse.
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/systemctl" <<'FAKE'
+#!/bin/sh
+# Two timers. backup.timer's service is loaded; ghost.timer's is not — exactly
+# what a timer left behind by a deleted script looks like.
+case "$1 $2" in
+  "list-timers --all")
+    echo "Mon 2026-09-15 06:00:00 UTC 12h left n/a n/a backup.timer backup.service"
+    echo "Mon 2026-09-15 07:00:00 UTC 13h left n/a n/a ghost.timer ghost.service"
+    ;;
+  "list-units --state=failed") ;;
+  "show -p")
+    # the unit is the LAST argument: systemctl show -p Unit --value <unit>
+    for a in "$@"; do u="$a"; done
+    case "$u" in
+      backup.timer) echo backup.service ;;
+      ghost.timer)  echo ghost.service ;;
+      backup.service) echo loaded ;;
+      ghost.service)  echo not-found ;;
+    esac
+    ;;
+esac
+FAKE
+chmod +x "$WORK/bin/systemctl"
+fakectl() { DEADMAN_SYSTEMCTL="$WORK/bin/systemctl" run_deadman "${1:-}"; }
+
+only "$(printf 'orphan_timers\tevery timer still has its service')"
+out="$(fakectl)"
+if printf '%s' "$out" | grep -q 'ghost.timer' && ! printf '%s' "$out" | grep -q 'backup.timer'; then
+  pass "a timer whose service no longer exists is caught, and the healthy one is not named"
+else
+  fail "an orphan timer passed"; printf '%s\n' "$out" | sed 's/^/        /' | tail -3
+fi
+
+# And the other direction, on the same stand-in with the ghost removed: the
+# rule must go quiet rather than being satisfied by anything.
+sed -i.bak '/ghost/d' "$WORK/bin/systemctl" && rm -f "$WORK/bin/systemctl.bak"
+out="$(fakectl --dry-run)"
+if printf '%s' "$out" | grep -q '  ok    every timer still has its service'; then
+  pass "timers that all have their services are reported clean"
+else
+  fail "a clean set of timers was reported as broken"; printf '%s\n' "$out" | sed 's/^/        /' | tail -3
+fi
+
 # --------------------------------------------------- an empty configuration
 # The one thing a misconfiguration must not do is look healthy.
 rm -f "$WORK/checks.d"/*.checks
