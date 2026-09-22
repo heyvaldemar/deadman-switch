@@ -81,6 +81,17 @@ One per line: `KIND<TAB>NAME<TAB>ARGUMENTS`, in any file under `checks.d` ending
 
 **An unreadable bus and a clean bus are different facts.** An early version of the systemd check swallowed stderr and treated empty output as "nothing failed", so a host where `systemctl` could not answer at all reported everything fine, forever, in the confident tone of a working check.
 
+**Software cannot recover a host that has stopped being able to run software.** This watches, and watching ends where the kernel does. A reboot commanded on a machine with processes wedged in uninterruptible sleep is accepted and then never completes: the shutdown waits on tasks that cannot be signalled, the alarm this raises is correct, and nothing here can act on it. The kernel's own watchdog can, because it stops being fed and resets the board.
+
+```ini
+# /etc/systemd/system.conf.d/watchdog.conf
+[Manager]
+RuntimeWatchdogSec=60
+RebootWatchdogSec=10min
+```
+
+`RuntimeWatchdogSec` arms the hardware timer while the system is up; `RebootWatchdogSec` bounds a shutdown that hangs. Check the device exists first — `ls /dev/watchdog*` — because on a machine without one these settings are accepted and do nothing, which is the shape this whole file argues against. `wdctl` reports which driver is behind it.
+
 **An empty configuration is a failure, not a pass.** A checks directory with nothing in it pings the failure endpoint. The one thing a misconfiguration must never do is look healthy.
 
 ## Testing
