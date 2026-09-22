@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_(no unreleased changes yet)_
+
+## [1.2.0] - 2026-09-22
+
 ### Added
 
 - **Where this tool's watching ends, and what takes over.** A reboot commanded on a host with processes wedged in uninterruptible sleep is accepted and never completes; the alarm this raises is correct and nothing in software can act on it. The README now names the kernel watchdog that can — `RuntimeWatchdogSec` and `RebootWatchdogSec`, with the check that the device exists first, since on a machine without one those settings are accepted and do nothing.
@@ -70,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty output as "nothing failed" reports a host that cannot answer as healthy,
   forever.
 
-[Unreleased]: https://github.com/heyvaldemar/deadman-switch/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/heyvaldemar/deadman-switch/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/heyvaldemar/deadman-switch/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/heyvaldemar/deadman-switch/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/heyvaldemar/deadman-switch/releases/tag/v1.0.0
