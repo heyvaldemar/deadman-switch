@@ -1,6 +1,7 @@
 # Dead man's switch
 
 [![Deadman Tests](https://github.com/heyvaldemar/deadman-switch/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/heyvaldemar/deadman-switch/actions/workflows/tests.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14835/badge)](https://www.bestpractices.dev/projects/14835)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 An alerting path that dies takes its alerts with it, and silence reads as "all clear".
