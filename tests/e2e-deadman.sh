@@ -246,6 +246,102 @@ else
   fail "the alarm carried no reason"; cat "$WORK/pings.log"
 fi
 
+# --------------------------------------- what the reason must not carry out
+#
+# The reason is the failing check's own output, and it goes to a service
+# outside this machine and into the journal. A URL with credentials in it is
+# the shape that turns up there by accident, so one is planted in every place a
+# reason can come from, and the assertions read what actually arrived.
+PLANT="planted-value-$$"
+leaked() { grep -c 'planted' "$WORK/pings.log" "$WORK/said.log" 2>/dev/null | awk -F: '{n+=$NF} END {print n+0}'; }
+run_and_keep() { : > "$WORK/pings.log"; run_deadman > "$WORK/said.log" 2>&1; }
+
+only "$(printf 'command\tthe mirror push\techo "push to https://mirror:%s@git.example.invalid/x.git failed"; exit 1' "$PLANT")"
+run_and_keep
+if [ "$(grep -c 'https://<redacted>@git.example.invalid/x.git failed' "$WORK/pings.log")" -eq 1 ] && [ "$(leaked)" -eq 0 ]; then
+  pass "credentials in a URL are cut out of the reason, and the rest of it still arrives"
+else
+  fail "a URL's credentials travelled with the alarm"
+fi
+
+# A command that fails without a word. Its own command line used to become the
+# reason, and that line is configuration: it holds what the output never would.
+only "$(printf 'command\ta quiet failure\tfalse https://probe:%s@git.example.invalid/' "$PLANT")"
+run_and_keep
+if [ "$(grep -c 'a quiet failure: command failed with exit 1 and no output' "$WORK/pings.log")" -eq 1 ] && [ "$(leaked)" -eq 0 ]; then
+  pass "a silent failure is reported by its exit code, not by its command line"
+else
+  fail "a silent failure sent its own command line with the alarm"
+fi
+
+# THE CUT COMES AFTER THE REDACTION. The reason is shortened to 300 bytes; a
+# URL that straddles that point loses its `@`, stops looking like a URL, and
+# the first half of the token goes out untouched. The filler puts the planted
+# value exactly there.
+filler="$(printf 'x%.0s' $(seq 1 270))"
+only "$(printf 'command\ta long failure\techo %s https://mirror:%s@git.example.invalid/x.git; exit 1' "$filler" "$PLANT")"
+run_and_keep
+if [ "$(grep -c 'a long failure: xxx' "$WORK/pings.log")" -eq 1 ] && [ "$(leaked)" -eq 0 ]; then
+  pass "a URL cut in half by the length limit leaves no part of its credentials behind"
+else
+  fail "the length limit cut a URL in half and what was left of its credentials went out"
+fi
+
+# The file a watcher drops is quoted in the alarm, so it gets the same care.
+only "$(printf 'absent\ta critical finding\t%s/critical' "$WORK")"
+printf 'mirror push to https://mirror:%s@git.example.invalid/x.git was refused\n' "$PLANT" > "$WORK/critical"
+run_and_keep
+if [ "$(grep -c 'https://<redacted>@git.example.invalid/x.git was refused' "$WORK/pings.log")" -eq 1 ] && [ "$(leaked)" -eq 0 ]; then
+  pass "a dropped critical file is quoted without the credentials in it"
+else
+  fail "a critical file's credentials travelled with the alarm"
+fi
+rm -f "$WORK/critical"
+
+only "$(printf 'agree\tthe two remotes\techo https://one:%s@a.example.invalid/ ::: echo https://two:%s@b.example.invalid/' "$PLANT" "$PLANT")"
+run_and_keep
+if [ "$(grep -c "disagree: 'https://<redacted>@a.example.invalid/' against 'https://<redacted>@b.example.invalid/'" "$WORK/pings.log")" -eq 1 ] && [ "$(leaked)" -eq 0 ]; then
+  pass "two answers that disagree are quoted without the credentials in them"
+else
+  fail "a disagreement quoted its credentials in the alarm"
+fi
+
+# And the other direction: a reason with nothing to hide arrives as written,
+# address and all. A filter that eats ordinary text is its own kind of silence.
+only "$(printf 'command\tthe status page\techo "https://status.example.invalid/api?mail=ops@example.invalid answered 503"; exit 1')"
+run_and_keep
+if [ "$(grep -c 'the status page: https://status.example.invalid/api?mail=ops@example.invalid answered 503' "$WORK/pings.log")" -eq 1 ]; then
+  pass "a URL without credentials is left exactly as it was printed"
+else
+  fail "a reason with nothing to hide was altered on the way out"; sed 's/^/        /' "$WORK/pings.log"
+fi
+
+# ------------------------------------------- the ping URL is a credential too
+#
+# Whoever holds it can report this host as healthy. An argument is readable by
+# every local account for as long as the process lives, so the URL has to reach
+# curl some other way. A stand-in records the arguments curl was really started
+# with, which is what `ps` would have shown, and then runs the real one.
+mkdir -p "$WORK/spy"
+REAL_CURL="$(command -v curl)"
+cat > "$WORK/spy/curl" <<SPY
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/argv.log"
+exec "$REAL_CURL" "\$@"
+SPY
+chmod +x "$WORK/spy/curl"
+spied() { PATH="$WORK/spy:$PATH" run_deadman >/dev/null 2>&1; }
+
+: > "$WORK/pings.log"; : > "$WORK/argv.log"
+only "$(printf 'command\ta passing check\ttrue')"; spied
+only "$(printf 'command\tthe named check\texit 3')"; spied
+if [ "$(grep -c '^/switch	' "$WORK/pings.log")" -eq 1 ] && [ "$(grep -c '^/switch/fail	' "$WORK/pings.log")" -eq 1 ] \
+   && [ "$(grep -c . "$WORK/argv.log")" -eq 2 ] && [ "$(grep -c 'switch' "$WORK/argv.log")" -eq 0 ]; then
+  pass "both pings arrive, and the ping URL is never an argument of curl"
+else
+  fail "the ping URL was on curl's command line, or a ping did not arrive"
+fi
+
 # ------------------------------------------------ a switch that is not there
 # curl -s without -f exits ZERO on an HTTP error, so a revoked switch would
 # swallow every alarm silently. The run must not report success.

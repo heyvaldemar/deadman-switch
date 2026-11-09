@@ -95,11 +95,17 @@ RebootWatchdogSec=10min
 
 **An empty configuration is a failure, not a pass.** A checks directory with nothing in it pings the failure endpoint. The one thing a misconfiguration must never do is look healthy.
 
+**The reason is somebody else's output, and it leaves the machine.** The text that travels with an alarm is whatever the failing command printed, or the first bytes of a file a watcher dropped. It lands in the journal and on a ping service, and neither was meant to hold anything private. A wrapper that echoes its remote, a script run under `set -x` or a client quoting the address it could not reach puts `https://user:token@host` into a notification. So the user-info part of every URL is replaced with `<redacted>` before the reason is logged or sent, and before it is shortened: a URL cut at the length limit loses its `@`, stops looking like a URL, and what is left of the token passes any filter that runs afterwards. A command that fails without a word reports its exit code and never its own command line, because that line is configuration and holds what the output would not. Only that one shape is removed. A token printed bare is not recognised, so a check whose output can contain one should print less.
+
+**The ping URL is a credential.** Whoever holds it can tell the switch this host is fine, and that is the one message nobody else should be able to send. Keeping it in a file only root can read is undone by handing it to `curl` as an argument: a process's arguments are readable by every local account, through `ps` or `/proc/<pid>/cmdline`, for as long as the request takes. The URL goes to `curl` on stdin, as a `--config -` line.
+
 ## Testing
 
 `tests/e2e-deadman.sh` gives every check kind a real violation and fails the run if the kind stays quiet, against real containers and a local HTTP server that records what was actually requested — so "did it report" is a measurement, not a reading of the source.
 
-Twelve scenarios, including the four that are easy to get wrong: an empty configuration reports a failure rather than a green run, the failing check's name travels with the alarm instead of a bare red light, a marker that never existed is reported differently from one that stopped moving, and a switch that cannot be reached fails the run instead of passing quietly.
+The scenarios include the ones that are easy to get wrong: an empty configuration reports a failure rather than a green run, the failing check's name travels with the alarm instead of a bare red light, a marker that never existed is reported differently from one that stopped moving, and a switch that cannot be reached fails the run instead of passing quietly.
+
+The rest are about what leaves the machine. A URL with credentials in it is planted everywhere a reason can come from, including across the point where the reason is cut, and the assertions read what the server received. For the ping URL, `curl` is swapped for a stand-in that records the arguments it was started with, which is what `ps` would have shown, and the URL must not be among them.
 
 ---
 

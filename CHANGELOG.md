@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(no unreleased changes yet)_
 
+## [1.2.1] - 2026-11-09
+
+### Security
+
+- **A failure reason no longer carries a URL's credentials off the machine.**
+  The reason is the failing check's own output. It goes into the journal and
+  into the body of the ping, on a service that was never meant to hold anything
+  private. A wrapper that echoes its remote, a script run under `set -x` or a
+  client quoting the address it could not reach puts `https://user:token@host`
+  into an alarm. The user-info part of every URL is now replaced with
+  `<redacted>` in each place a reason comes from: a command's output, the two
+  answers `agree` quotes and the file `absent` reads. The redaction runs before
+  the reason is shortened. A URL cut at the 300-byte limit loses its `@`, stops
+  looking like a URL, and the first half of the token used to go out untouched.
+- **A command that fails without output no longer sends its own command line.**
+  The fallback reason was `command failed: <the command>`, and that line is
+  configuration: it can hold a URL, a header or a flag the command's output
+  never would. The reason is now `command failed with exit N and no output`.
+  The check's name already says which one failed.
+- **The ping URL is no longer an argument of `curl`.** Whoever holds that URL
+  can report the host as healthy. The install step keeps it in a file only root
+  can read, and every run then put it on a command line, which any local
+  account can read for as long as the request takes. It now reaches `curl` on
+  stdin, as a `--config -` line.
+
+### Fixed
+
+- **The cuts that shorten a reason read their input to the end.** The 1.0.0
+  notes say nothing here pipes into `head`. Three cuts did. Under systemd,
+  which ignores SIGPIPE, a failing command that printed more than a pipe's
+  worth had `echo: write error: Broken pipe` appended to its reason.
+
+### Changed
+
+- `absent` reads at most the first 64 KiB of the file it quotes. A watcher's
+  finding is a few lines, and a runaway file must not hold the run.
+- Seven scenarios. Six of them fail against 1.2.0, one for each path above.
+  The seventh runs the other way: a URL with no credentials in it, and an
+  address after the `?`, arrives exactly as it was printed. For the ping URL
+  the suite swaps `curl` for a stand-in that records the arguments it was
+  started with, which is what `ps` would have shown.
+
 ## [1.2.0] - 2026-09-22
 
 ### Added
@@ -74,7 +116,8 @@ _(no unreleased changes yet)_
   empty output as "nothing failed" reports a host that cannot answer as healthy,
   forever.
 
-[Unreleased]: https://github.com/heyvaldemar/deadman-switch/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/heyvaldemar/deadman-switch/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/heyvaldemar/deadman-switch/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/heyvaldemar/deadman-switch/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/heyvaldemar/deadman-switch/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/heyvaldemar/deadman-switch/releases/tag/v1.0.0

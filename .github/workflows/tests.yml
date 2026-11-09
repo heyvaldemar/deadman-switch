@@ -37,7 +37,7 @@ jobs:
         run: systemd-analyze verify deadman@.timer 2>&1 | grep -v 'Failed to prepare filename' || true
 
   scenarios:
-    name: Twelve scenarios, each shown a real violation
+    name: Every scenario shown a real violation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

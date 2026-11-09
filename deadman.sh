@@ -40,6 +40,54 @@ MODE="${1:-}"
 
 log() { printf '%s\n' "$*"; }
 
+# ------------------------------------------------- what leaves this machine
+#
+# Two things go out when a run fails: the reason, into the journal and into the
+# body of the ping, and the ping itself.
+#
+# THE REASON IS SOMEBODY ELSE'S OUTPUT. It is whatever the failing command
+# printed, or the first bytes of a file a watcher dropped, and it lands on a
+# service that was never meant to hold anything private. A wrapper that echoes
+# its remote, a script run under `set -x`, a client quoting the URL it could
+# not reach: each of those puts `https://user:token@host` into an alarm. So the
+# credentials in a URL are cut out before the reason is logged or sent, and
+# BEFORE IT IS SHORTENED, because half a URL no longer looks like one and what
+# is left of the token would pass straight through.
+#
+# Only that one shape is removed. It is the one that can be recognised without
+# guessing, and a filter that guesses hides the part of the message you needed.
+redact() { LC_ALL=C sed -E 's|([A-Za-z][A-Za-z0-9+.-]*://)[^/?#[:space:]]+@|\1<redacted>@|g'; }
+
+# The first N bytes of stdin, with the rest read to the end and thrown away.
+# A bare `head` closes the pipe early, which is the mistake described at the
+# top of this file: the writer's complaint about it ends up inside the reason.
+first_bytes() { head -c "$1"; cat >/dev/null; }
+
+# THE PING URL IS A CREDENTIAL TOO. Whoever holds it can report this host as
+# healthy, which is the one thing a dead man's switch must not let anybody else
+# do. The install step makes the file that holds it readable by root alone, and
+# an argument of a running process is readable by every local account for as
+# long as the request takes. So the URL reaches curl on stdin, as a line of
+# configuration, and never as an argument.
+#
+#   ping_switch ""            the run passed
+#   ping_switch /fail REASON  the run failed
+#
+# -f, not bare -s. `curl -s` without -f exits ZERO on an HTTP error, so a
+# revoked switch, a renamed check or a service returning 500 would swallow
+# every alarm this host raises, silently, and the caller could not tell.
+ping_switch() {
+  local url="${PING_URL}$1"
+  url="${url//\\/\\\\}"; url="${url//\"/\\\"}"
+  if [ -n "${2:-}" ]; then
+    printf 'url = "%s"\n' "$url" \
+      | curl -fsS -m "$CURL_TIMEOUT" --data-raw "$2" --config - >/dev/null 2>&1
+  else
+    printf 'url = "%s"\n' "$url" \
+      | curl -fsS -m "$CURL_TIMEOUT" --config - >/dev/null 2>&1
+  fi
+}
+
 # ---------------------------------------------------------------- check kinds
 #
 # Each check file in checks.d is `KIND<TAB>NAME<TAB>ARGS`. The kinds below
@@ -138,7 +186,9 @@ check_mount_writable() {
 # reaches you by a channel that does not depend on this machine being alive.
 check_absent() {
   local f="$1"
-  [ -s "$f" ] && { echo "$(basename "$f"): $(head -c 300 "$f")"; return 1; }
+  # Redacted, then cut. No more than the first 64 KiB is read on the way: a
+  # watcher's finding is a few lines, and a runaway file must not hold the run.
+  [ -s "$f" ] && { echo "$(basename "$f"): $(head -c 65536 "$f" | redact | first_bytes 300)"; return 1; }
   return 0
 }
 
@@ -184,19 +234,25 @@ check_no_failed_units() {
 # The two commands are separated by ` ::: `. Both run under sh -c; the check
 # fails when their output differs, and says both answers.
 check_agree() {
-  local spec="$*" left right a b
+  local spec="$*" left right a b said_a said_b
   case "$spec" in *' ::: '*) ;; *) echo "agree needs two commands separated by ' ::: '"; return 1 ;; esac
   left="${spec%% ::: *}"; right="${spec#* ::: }"
-  a="$(sh -c "$left" 2>&1)"; b="$(sh -c "$right" 2>&1)"
+  said_a="$(sh -c "$left" 2>&1)"; said_b="$(sh -c "$right" 2>&1)"
   # Whitespace differs between two tools answering the same question far more
   # often than the answer does.
-  a="$(printf '%s' "$a" | tr -d '[:space:]')"; b="$(printf '%s' "$b" | tr -d '[:space:]')"
+  a="$(printf '%s' "$said_a" | tr -d '[:space:]')"; b="$(printf '%s' "$said_b" | tr -d '[:space:]')"
   if [ -z "$a" ] && [ -z "$b" ]; then
     # Both silent is not agreement, it is two commands that did not run.
     echo "both sides answered nothing — a question with no answer is not two answers that agree"
     return 1
   fi
-  [ "$a" = "$b" ] || { echo "the two sides disagree: '$(printf '%s' "$a" | head -c 80)' against '$(printf '%s' "$b" | head -c 80)'"; return 1; }
+  [ "$a" = "$b" ] && return 0
+  # What gets quoted is redacted while its whitespace is still there to end a
+  # URL, and only then squeezed the way it was compared.
+  a="$(printf '%s' "$said_a" | redact | tr -d '[:space:]' | first_bytes 80)"
+  b="$(printf '%s' "$said_b" | redact | tr -d '[:space:]' | first_bytes 80)"
+  echo "the two sides disagree: '$a' against '$b'"
+  return 1
 }
 
 # EVERY ENABLED TIMER STILL HAS THE SERVICE IT STARTS.
@@ -229,9 +285,21 @@ check_orphan_timers() {
 
 # Anything else. The command runs under `sh -c`; a non-zero exit fails the run
 # and its output becomes the reason.
+#
+# A command that fails without a word is reported by its exit code and not by
+# its own command line. That line is configuration: it can hold a URL, a header
+# or a flag that the command's output never would, and the name of the check
+# already says which one failed.
 check_command() {
-  local out
-  out="$(sh -c "$*" 2>&1)" || { echo "${out:-command failed: $*}" | head -c 300; return 1; }
+  local out rc
+  out="$(sh -c "$*" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  if [ -n "$out" ]; then
+    printf '%s' "$out" | redact | first_bytes 300
+  else
+    echo "command failed with exit $rc and no output"
+  fi
+  return 1
 }
 
 # ------------------------------------------------------------------ the run
@@ -244,7 +312,7 @@ if [ "${#checks[@]}" -eq 0 ]; then
   # is a misconfiguration, and the one thing it must not do is look healthy.
   log "deadman: no checks found in $CONF_DIR"
   [ "$MODE" = "--dry-run" ] || [ "$MODE" = "--list" ] || {
-    [ -n "$PING_URL" ] && curl -fsS -m "$CURL_TIMEOUT" --data-raw "no checks configured in $CONF_DIR" "$PING_URL/fail" >/dev/null 2>&1
+    [ -n "$PING_URL" ] && ping_switch /fail "no checks configured in $CONF_DIR"
   }
   exit 1
 fi
@@ -264,6 +332,8 @@ while IFS= read -r line; do
   if out="$(check_"$kind" $args 2>&1)"; then
     [ "$MODE" = "--dry-run" ] && log "  ok    $name"
   else
+    # Every kind's reason passes through here, whatever produced it.
+    out="$(printf '%s' "$out" | redact)"
     [ "$MODE" = "--dry-run" ] && log "  FAIL  $name: $out"
     failures=$((failures+1))
     [ -z "$reason" ] && reason="$name: $out"
@@ -274,18 +344,15 @@ done < <(cat "${checks[@]}")
 
 if [ "$ran" -eq 0 ]; then
   log "deadman: the check files exist but define no checks"
-  [ "$MODE" = "--dry-run" ] || { [ -n "$PING_URL" ] && curl -fsS -m "$CURL_TIMEOUT" --data-raw "check files define nothing" "$PING_URL/fail" >/dev/null 2>&1; }
+  [ "$MODE" = "--dry-run" ] || { [ -n "$PING_URL" ] && ping_switch /fail "check files define nothing"; }
   exit 1
 fi
 
 if [ "$failures" -gt 0 ]; then
   log "deadman: $failures of $ran checks failed — $reason"
   [ "$MODE" = "--dry-run" ] && exit 1
-  # -f, not bare -s. `curl -s` without -f exits ZERO on an HTTP error, so a
-  # revoked switch, a renamed check or a service returning 500 would swallow
-  # every alarm this host raises, silently, and the caller could not tell.
   if [ -n "$PING_URL" ]; then
-    curl -fsS -m "$CURL_TIMEOUT" --data-raw "$reason" "$PING_URL/fail" >/dev/null 2>&1 \
+    ping_switch /fail "$reason" \
       || log "deadman: could not reach the switch to report the failure"
   fi
   exit 1
@@ -294,7 +361,7 @@ fi
 log "deadman: all $ran checks passed"
 [ "$MODE" = "--dry-run" ] && exit 0
 if [ -n "$PING_URL" ]; then
-  curl -fsS -m "$CURL_TIMEOUT" "$PING_URL" >/dev/null 2>&1 \
+  ping_switch "" \
     || { log "deadman: checks passed but the switch could not be reached"; exit 1; }
 fi
 exit 0
